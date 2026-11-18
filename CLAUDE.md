@@ -110,13 +110,20 @@ retried once. ABORT is written without waiting for that mutex.
 ## Tauri port status (2026-11-18)
 
 Done and checked on Windows: `cargo clippy` is clean, `npm run typecheck`, `npm test` and
-`npm run app:build` pass (an NSIS installer of about 3 MB), and the app starts and runs a BLE scan
-without errors. **Not yet tested against the logger** (none was powered on): connect, list,
-download, cancel, delete all need a run with real hardware.
+`npm run app:build` pass (an NSIS installer of about 3 MB).
+
+Tested against the logger (Pegscrape-1474) on Windows, release build:
+- Scan finds it; connect in about 2.3 s (1.2 s to the remembered logger); INFO and LS work.
+- GETZ download of the 3.4 MB RIDE0005.CSV in 5.7 s (about 620 KB/s, same as Electron), SHA-256
+  identical to the file on the card.
+- Cancel: ABORT ends the download within about 130 ms with `aborted`; the link keeps working.
+- Disconnect: the page is told, later commands fail with "Not connected to the logger."
+- Through the Rides panel: connect from the scan list, download with live progress, the ride
+  appears under "Saved in this app" and opens (map, timeline, stats), disconnect, reconnect.
+- **Not tested: DEL** (deleting a ride on the logger), same as on `main`.
 
 To do:
-1. Test every flow on Windows with the logger; compare download speed with `main` (about 6 s
-   for a 3.4 MB ride).
+1. Test DEL with a throwaway ride.
 2. Android: install the NDK and the Rust Android targets, `npm run android:init`, rerun
    `scripts/make-icon.ps1` for the launcher icons, and test on the phone (permissions, speed,
    the 40 s drop).
