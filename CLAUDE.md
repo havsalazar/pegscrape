@@ -128,6 +128,8 @@ Tested on Android (Galaxy SM-S948B, debug APK installed over the Capacitor app, 
 - GETZ download of RIDE0005.CSV in 5.75 s, SHA-256 identical: as fast as Capacitor, so the
   missing "connection priority HIGH" call doesn't matter.
 - Cancel works; 11 downloads back to back over 63 s with no drop (the 40 s drop doesn't recur).
+- Through the Rides panel: scan list, connect, download (613 KB in 1.5 s), saved, opens with
+  map, telemetry and timeline.
 - A download with the screen off for 15 s (phone dozing) completed normally. Longer screen-off
   periods still need the foreground service (to do 2).
 - The page's origin changed from Capacitor's to `http://tauri.localhost`, so rides saved and map
