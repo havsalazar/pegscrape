@@ -27,6 +27,13 @@ npm run dev            # the web code alone in a browser (no Bluetooth there)
 npm test               # parses every CSV in ./ingest and runs sanity checks
 ```
 
+A simulated ride (one lap of a circuit from a start point out to a via point and back, with the
+lean each corner needs and a target average speed) for testing without riding:
+
+```powershell
+node --experimental-strip-types scripts/simulate-ride.ts --start <lat>,<lon> --via <lat>,<lon> --avg 160 --out ingest/SIM0001.CSV
+```
+
 ## Build
 
 ### Windows
