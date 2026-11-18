@@ -122,14 +122,23 @@ Tested against the logger (Pegscrape-1474) on Windows, release build:
   appears under "Saved in this app" and opens (map, timeline, stats), disconnect, reconnect.
 - **Not tested: DEL** (deleting a ride on the logger), same as on `main`.
 
+Tested on Android (Galaxy SM-S948B, debug APK installed over the Capacitor app, versionCode 4):
+- Installs in place over the Capacitor app (same debug signing key).
+- Scan, connect (1.3 s), INFO, LS work; the Bluetooth permission carried over.
+- GETZ download of RIDE0005.CSV in 5.75 s, SHA-256 identical: as fast as Capacitor, so the
+  missing "connection priority HIGH" call doesn't matter.
+- Cancel works; 11 downloads back to back over 63 s with no drop (the 40 s drop doesn't recur).
+- A download with the screen off for 15 s (phone dozing) completed normally. Longer screen-off
+  periods still need the foreground service (to do 2).
+- The page's origin changed from Capacitor's to `http://tauri.localhost`, so rides saved and map
+  tiles cached by the Capacitor app are **not** visible in the Tauri app (IndexedDB is per
+  origin). They have to be downloaded again.
+
 To do:
 1. Test DEL with a throwaway ride.
-2. Android: install the NDK and the Rust Android targets, `npm run android:init`, rerun
-   `scripts/make-icon.ps1` for the launcher icons, and test on the phone (permissions, speed,
-   the 40 s drop).
-3. Port the screen-off foreground service as a small Tauri mobile plugin and wire up
+2. Port the screen-off foreground service as a small Tauri mobile plugin and wire up
    `src/lib/keepAlive.ts`.
-4. Android release signing (needs the user's keystore).
+3. Android release signing (needs the user's keystore).
 
 ## Checks
 
@@ -143,6 +152,9 @@ npm run app:build     # Windows installer
 
 - Rust lives in `~/.cargo/bin`, which a shell opened before rustup was installed doesn't have on
   its PATH.
+- Android builds: `ANDROID_HOME=<ANDROID_SDK>`, `NDK_HOME=<ANDROID_SDK>/ndk/<version>`,
+  `JAVA_HOME=<JDK21_HOME>`, then `npx tauri android build --debug --apk --target aarch64` and
+  `adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`.
 - To drive the Windows app: start `src-tauri/target/release/pegscrape.exe` with
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`, then use the Chrome
   DevTools Protocol on `http://127.0.0.1:9333/json` and call commands through
