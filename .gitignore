@@ -1,13 +1,7 @@
 node_modules/
 dist/
-release/
 *.tsbuildinfo
 .DS_Store
-# Capacitor/Android build output
-android/app/build/
-android/build/
-android/.gradle/
-android/local.properties
 
 # Real ride logs contain GPS tracks: keep them local
 ingest/*
