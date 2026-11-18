@@ -1,7 +1,8 @@
 ﻿# Pegscrape app icon: an artificial horizon tilted 40 degrees (a bike leaning into a corner) with
 # the bike upright on it. "Night teal" colours. Run from the project root:
 #   powershell -File scripts/make-icon.ps1
-# Writes build/icon.png + electron/icon.png (Windows) and the Android launcher icons.
+# Writes build/icon.png, the Tauri icons made from it (src-tauri/icons), and, once
+# `npm run android:init` has created src-tauri/gen/android, the Android launcher icons.
 param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = 'Stop'
@@ -83,12 +84,15 @@ function Render([int]$size, [string]$mode, [string]$out) {
   $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
 }
 
-# Windows (electron-builder makes the .ico from build/icon.png; the window uses electron/icon.png).
+# Windows: the source icon; `tauri icon` makes the .ico/.png set in src-tauri/icons from it.
 Render 1024 'tile' (Join-Path $Root 'build\icon.png')
-Copy-Item (Join-Path $Root 'build\icon.png') (Join-Path $Root 'electron\icon.png')
+Push-Location $Root
+try { npx tauri icon build/icon.png; if ($LASTEXITCODE) { throw 'tauri icon failed' } } finally { Pop-Location }
 
-# Android launcher icons: legacy (48dp) and adaptive foreground (108dp) per density.
-$res = Join-Path $Root 'android\app\src\main\res'
+# Android launcher icons: legacy (48dp) and adaptive foreground (108dp) per density. These replace
+# the ones `tauri icon` wrote, because the adaptive foreground needs the art inside the safe zone.
+$res = Join-Path $Root 'src-tauri\gen\android\app\src\main\res'
+if (-not (Test-Path $res)) { Write-Host 'No src-tauri/gen/android yet: skipping the Android icons.'; return }
 foreach ($d in @(@('mdpi', 1), @('hdpi', 1.5), @('xhdpi', 2), @('xxhdpi', 3), @('xxxhdpi', 4))) {
   $dir = Join-Path $res "mipmap-$($d[0])"
   Render ([int](48 * $d[1])) 'tile' (Join-Path $dir 'ic_launcher.png')
