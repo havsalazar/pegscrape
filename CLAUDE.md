@@ -7,10 +7,11 @@ covers what isn't obvious from the code.
 
 Pegscrape views the `RIDExxxx.CSV` ride logs written by an ESP32-S3 motorcycle lean-angle logger
 (Waveshare ESP32-S3-Touch-AMOLED-1.75). The app is React 19 + TypeScript + Vite 8 + Tailwind v4 +
-shadcn/ui + Leaflet. It ships in two shells:
+shadcn/ui + Leaflet, in a **Tauri 2** shell (`src-tauri/`, Rust) for Windows and Android, app id
+`com.incli.app` (kept from the Capacitor app, so Android updates it in place).
 
-- **Windows**: Electron (`electron/main.cjs`), built with `npm run dist:win`.
-- **Android**: Capacitor 8 (`android/`), app id `com.incli.app`.
+Branches: `main` is the previous Electron (Windows) + Capacitor (Android) app, which works
+end-to-end on both. `tauri` is the port to Tauri (in progress, see "Tauri port status").
 
 The logger's firmware lives in a **separate repo**, `rounded-inc` (local checkout:
 `<FIRMWARE_REPO>`). `rounded_fw/` is the ESP-IDF 6.1 firmware and `roundedui/` its LVGL Pro UI.
@@ -19,8 +20,9 @@ The app and the firmware share a Bluetooth protocol, so a change to one side may
 Repository: https://github.com/havsalazar/pegscrape (public). Ride logs in `ingest/` hold real
 GPS tracks and are git-ignored; never commit them.
 
-Version: 0.3.0 (`package.json` and `android/app/build.gradle`: versionName 0.3.0, versionCode 3).
-Bump them together.
+Version: 0.3.0. Bump `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`
+together. The Android versionCode is `bundle.android.versionCode` in `tauri.conf.json` (4; the
+Capacitor app was at 3, and it must keep growing for in-place updates).
 
 ### Local paths (placeholders)
 
@@ -35,18 +37,26 @@ Replace these with the paths on your machine:
 ## The Bluetooth link to the logger
 
 Files:
-- `src/lib/loggerLink.ts`: the `LoggerLink` class (connect, info, list, download, remove,
-  disconnect).
+- `src-tauri/src/logger.rs`: the protocol, in Rust. Tauri commands `logger_scan_start/stop`,
+  `logger_connect/disconnect`, `logger_info`, `logger_list`, `logger_download`, `logger_abort`,
+  `logger_remove`. Errors reach the page as `{ kind: 'logger' | 'aborted' | 'ble', message }`.
+- `src/lib/loggerLink.ts`: the page's side, the `LoggerLink` class (same API as on `main`, so
+  RidesSheet didn't change). Maps `aborted` to an `AbortError`, `logger` to `LoggerError`.
 - `src/lib/rideLibrary.ts`: rides saved in the app (IndexedDB `pegscrape-rides`, stores `meta`
   and `data`).
 - `src/components/RidesSheet.tsx`: the Rides panel UI.
-- `src/lib/keepAlive.ts` + `android/app/src/main/java/com/incli/app/{KeepAlivePlugin,TransferService}.java`:
-  an Android foreground service that keeps a download alive with the screen off.
-- `electron/main.cjs`: the `select-bluetooth-device` handler (Electron has no device chooser; it
-  picks the first device named "Pegscrape…", 20 s timeout).
+- `src/lib/keepAlive.ts`: the Android foreground service for screen-off downloads. **A no-op on
+  this branch** until it's ported (the Capacitor version is
+  `android/app/src/main/java/com/incli/app/{KeepAlivePlugin,TransferService}.java` on `main`).
 
-The library is `@capacitor-community/bluetooth-le` 8.3.0: native on Android, Web Bluetooth in
-Electron and the browser. One code path serves both.
+The BLE library is `tauri-plugin-blec` 0.20 (crate `blec`): btleplug on Windows, its own Kotlin
+backend on Android. `logger.rs` uses its Rust API (`tauri_plugin_blec::get_handler()`), not its
+JavaScript one. Web Bluetooth isn't available in WebView2 or the Android WebView, so a plain
+browser (`npm run dev`) has no Bluetooth. Scanning works on both platforms, so the app always
+shows its own list of loggers (`canScan` is true in the app).
+
+Unlike the Capacitor plugin, blec has no "connection priority HIGH" call on Android, which made
+downloads several times faster there. If Android downloads are slow, that's the first suspect.
 
 ### Protocol
 
@@ -71,8 +81,9 @@ The header comment of `loggerLink.ts` is out of date (it says proto=1 and doesn'
 Any failure answers `X "<reason>"`, e.g. `recording: stop it first`, or `low memory` when the
 logger can't mount its SD card. RidesSheet maps these to user-facing text.
 
-The app uses GETZ when `proto >= 2` and `DecompressionStream` exists, and plain GET otherwise.
-Commands run one at a time with a 10 s idle timeout; a failed write is retried once.
+The app uses GETZ when `proto >= 2`, and plain GET otherwise. Commands run one at a time (a
+mutex in `logger.rs` is held for the whole command) with a 10 s idle timeout; a failed write is
+retried once. ABORT is written without waiting for that mutex.
 
 ### Hard-won constraints (don't undo these)
 
@@ -87,7 +98,7 @@ Commands run one at a time with a 10 s idle timeout; a failed write is retried o
   more, or parallel commands, are a bad idea. The firmware handles one command at a time.
 - The logger refuses card access while it's recording; the UI tells the user to stop recording.
 
-### Verified state (2026-11-14)
+### Verified state on `main` (Electron + Capacitor, 2026-11-14)
 
 - Windows (Electron) and Android (Galaxy SM-S948B): a 3.4 MB ride downloads in about 6 s
   compressed, also with the phone's screen off, with no drops.
@@ -96,33 +107,52 @@ Commands run one at a time with a 10 s idle timeout; a failed write is retried o
 - **Never tested against real hardware: deleting a ride on the logger (`DEL`)** from the app.
   Test it with a small throwaway ride before relying on it.
 
+## Tauri port status (2026-11-18)
+
+Done and checked on Windows: `cargo clippy` is clean, `npm run typecheck`, `npm test` and
+`npm run app:build` pass (an NSIS installer of about 3 MB), and the app starts and runs a BLE scan
+without errors. **Not yet tested against the logger** (none was powered on): connect, list,
+download, cancel, delete all need a run with real hardware.
+
+To do:
+1. Test every flow on Windows with the logger; compare download speed with `main` (about 6 s
+   for a 3.4 MB ride).
+2. Android: install the NDK and the Rust Android targets, `npm run android:init`, rerun
+   `scripts/make-icon.ps1` for the launcher icons, and test on the phone (permissions, speed,
+   the 40 s drop).
+3. Port the screen-off foreground service as a small Tauri mobile plugin and wire up
+   `src/lib/keepAlive.ts`.
+4. Android release signing (needs the user's keystore).
+
 ## Checks
 
 ```bash
 npm run typecheck     # tsc -b
 npm run build
 npm test              # parses every CSV in ./ingest and runs sanity checks
+cd src-tauri && cargo clippy
+npm run app:build     # Windows installer
 ```
 
-- Electron from a VS Code terminal: VS Code sets `ELECTRON_RUN_AS_NODE`, which makes Electron
-  behave like plain Node. Launch it with `env -u ELECTRON_RUN_AS_NODE npx electron .`.
-- Android command-line builds: Gradle 8.14 can't run on Android Studio's bundled JBR 25. Use
-  `JAVA_HOME=<JDK21_HOME>`, then `cd android && ./gradlew assembleDebug`.
-  Run `npm run android:sync` first after any web change.
+- Rust lives in `~/.cargo/bin`, which a shell opened before rustup was installed doesn't have on
+  its PATH.
+- To drive the Windows app: start `src-tauri/target/release/pegscrape.exe` with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`, then use the Chrome
+  DevTools Protocol on `http://127.0.0.1:9333/json` and call commands through
+  `window.__TAURI_INTERNALS__.invoke`.
+
+- Android builds: Gradle can't run on Android Studio's bundled JBR 25. Use
+  `JAVA_HOME=<JDK21_HOME>`.
 - The adb binary is `<ANDROID_SDK>/platform-tools/adb.exe`. The user's phone is a Galaxy
   SM-S948B on wireless adb. In Git Bash, prefix adb commands that take device paths with
   `MSYS_NO_PATHCONV=1`.
 - To drive the app on the phone: `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`,
   then use the Chrome DevTools Protocol (`Runtime.evaluate` with `userGesture: true`; Bluetooth
   needs a user gesture).
-- To see what the native BLE layer receives, temporarily set `loggingBehavior: 'debug'` in
-  `capacitor.config.ts` (the release value is `'none'`) and watch logcat for
-  "Notifying listeners".
 
 ## Release status
 
-- `release/Pegscrape Setup <version>.exe` and `release/Pegscrape <version>.exe` are built but
-  **unsigned** (no code-signing certificate), so SmartScreen will warn.
-- Android has only a debug build. There's no release keystore or `signingConfigs` in
-  `android/app/build.gradle`. A signed release needs the user's keystore; don't invent one.
-- Keep `loggingBehavior: 'none'` and leave no `console.log` debugging in release code.
+- The Windows installer (`src-tauri/target/release/bundle/nsis/`) is **unsigned** (no
+  code-signing certificate), so SmartScreen will warn.
+- Android has no release signing. A signed release needs the user's keystore; don't invent one.
+- Leave no `console.log` debugging in release code.

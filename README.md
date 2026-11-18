@@ -4,24 +4,26 @@ Viewer for the `RIDExxxx.CSV` files written by the ESP32-S3 lean-angle logger (`
 Open a ride to get an interactive map, a playback timeline, a rear view of the bike tilting with the
 recorded lean angle, speed, braking/acceleration g, and a ride summary.
 
-It's a React + TypeScript app (Vite, Tailwind v4, shadcn/ui, Leaflet), packaged as:
-
-- **Windows**: Electron (`npm run dist:win` → installer + portable `.exe` in `release/`)
-- **Android**: Capacitor (`android/` project, built with Android Studio / Gradle)
+It's a React + TypeScript app (Vite, Tailwind v4, shadcn/ui, Leaflet) in a
+[Tauri 2](https://v2.tauri.app) shell (`src-tauri/`), for Windows and Android. The Bluetooth link to
+the logger runs in Rust.
 
 ## Requirements
 
-- **Node.js 22.12+** (Vite 8, Electron 45 and Capacitor 8 refuse older versions).
+- **Node.js 22.12+** (Vite 8 refuses older versions).
   With nvm-windows, from PowerShell or cmd: `nvm install 22` then `nvm use 22`.
-- Android only: Android Studio and its SDK. Gradle 8.14 needs a JDK 17–24: if Android Studio's
-  bundled JDK is newer (25), point `JAVA_HOME` at a JDK 21 for command-line builds.
+- **Rust** (stable, via [rustup](https://rustup.rs)) and, on Windows, the MSVC C++ build tools
+  (Visual Studio "Desktop development with C++"). WebView2 ships with Windows 11.
+- Android only: the Android SDK and **NDK** (Android Studio → SDK Manager → SDK Tools → NDK),
+  `ANDROID_HOME` and `NDK_HOME` set, a JDK 17–21 as `JAVA_HOME`, and the Rust targets:
+  `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`.
 
 ## Develop
 
 ```powershell
 npm install
-npm run dev            # browser at http://localhost:5173
-npm run electron:dev   # same app inside an Electron window, with hot reload
+npm run app:dev        # the app in its window, with hot reload of the web code
+npm run dev            # the web code alone in a browser (no Bluetooth there)
 npm test               # parses every CSV in ./ingest and runs sanity checks
 ```
 
@@ -29,17 +31,18 @@ npm test               # parses every CSV in ./ingest and runs sanity checks
 
 ### Windows
 ```powershell
-npm run electron       # build and launch the desktop app
-npm run dist:win       # release/Pegscrape Setup x.y.z.exe and a portable exe
+npm run app:build      # src-tauri/target/release/bundle/nsis/Pegscrape_x.y.z_x64-setup.exe
 ```
 
 ### Android
 ```powershell
-npm run android:init   # once: build the web app and generate ./android
-npm run android:run    # build, sync and run on a connected device/emulator
-npm run android:open   # or open the project in Android Studio
+npm run android:init   # once: generates src-tauri/gen/android
+npm run android:dev    # run on a connected device, with hot reload
+npm run android:build  # APK/AAB (signing needs your release keystore)
 ```
-After changing web code, `npm run android:sync` copies the new build into the Android project.
+
+The icons come from `powershell -File scripts/make-icon.ps1` (desktop icons via `tauri icon`, plus
+the Android launcher icons once `src-tauri/gen/android` exists).
 
 Map tiles come from Esri. Every tile you view while online is saved on the device (IndexedDB, up to 25,000 tiles, least-recently-used dropped first), so areas you have already looked at work offline. New areas need a connection once. Past the deepest zoom you have saved, offline, a lower-zoom tile is enlarged instead (blurry but readable). The "Offline map" card shows how much is saved and can clear it. Everything else (CSV parsing, track, playback) runs fully offline.
 
@@ -79,14 +82,16 @@ Map tiles come from Esri. Every tile you view while online is saved on the devic
 
 ## Bluetooth link to the logger
 
-`src/lib/loggerLink.ts` talks to `rounded_fw/main/ble_sync.c` (the protocol is described at the top
-of both). It uses `@capacitor-community/bluetooth-le`: native on Android, Web Bluetooth in Electron
-(where `electron/main.cjs` picks the first logger found, as Electron has no device chooser).
+`src-tauri/src/logger.rs` talks to `rounded_fw/main/ble_sync.c` (the protocol is described at the
+top of both) through [tauri-plugin-blec](https://crates.io/crates/tauri-plugin-blec) (btleplug on
+Windows, its own backend on Android). `src/lib/loggerLink.ts` is the page's side: the same
+`LoggerLink` API as before, calling the Rust commands.
 
-- Downloads use `GETZ`: the logger sends the file as a zlib stream (10–18× smaller), inflated with
-  `DecompressionStream` and checked against a CRC-32 of the whole file.
-- Android keeps a download going with the screen off through a foreground service
-  (`android/.../TransferService.java`, started from `src/lib/keepAlive.ts`).
+- Downloads use `GETZ`: the logger sends the file as a zlib stream (10–18× smaller), inflated in
+  Rust (`flate2`) and checked against a CRC-32 of the whole file. The page gets the file in one
+  piece, and progress through a channel.
+- Android: keeping a download going with the screen off (a foreground service) is **not ported
+  yet**; `src/lib/keepAlive.ts` does nothing for now.
 - Android silently drops notifications over 512 bytes, even with MTU 517: the logger caps them.
 - Saved rides live in IndexedDB (`src/lib/rideLibrary.ts`), the CSV and its metadata in separate
   stores so listing doesn't load the files.
@@ -114,9 +119,9 @@ src/
   lib/ride.ts            CSV parser, interpolation, stats, frameAt()
   lib/loadRide.ts        runs the parser in a Web Worker (rideLoader.worker.ts) with progress
   lib/tileCache.ts       IndexedDB map tile cache; lib/cachedTileLayer.ts plugs it into Leaflet
-  lib/loggerLink.ts      Bluetooth link to the logger: list, download (compressed), delete
+  lib/loggerLink.ts      the page's side of the Bluetooth link (calls src-tauri/src/logger.rs)
   lib/rideLibrary.ts     rides saved in the app (IndexedDB)
-  lib/keepAlive.ts       Android foreground service around downloads
+  lib/keepAlive.ts       Android foreground service around downloads (not ported yet)
   hooks/usePlayback.ts   rAF playback clock (rates 0.5×–32×)
   components/
     RideMap.tsx          Leaflet map, coloured track, rider arrow
@@ -127,6 +132,8 @@ src/
     RidesSheet.tsx       the Rides panel: logger over Bluetooth + saved rides
     PlaybackControls.tsx
     ui/                  shadcn/ui components
-electron/main.cjs        Windows desktop shell
-capacitor.config.ts      Android shell
+src-tauri/
+  src/lib.rs             Tauri app: plugins and commands
+  src/logger.rs          the logger protocol over BLE (scan, connect, INFO, LS, GET/GETZ, DEL, ABORT)
+  tauri.conf.json        window, bundle and app id (com.incli.app)
 ```

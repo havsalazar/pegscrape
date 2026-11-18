@@ -1,0 +1,28 @@
+[package]
+name = "pegscrape"
+version = "0.3.0"
+description = "Ride log viewer for the ESP32 motorcycle lean-angle logger"
+authors = ["Henry Vargas"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "pegscrape_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.5", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.12.6", features = [] }
+tauri-plugin-blec = "0.20.0"
+flate2 = "1.1.11"
+crc32fast = "1.5.5"
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+uuid = { version = "1", features = ["macro-diagnostics"] }
