@@ -138,7 +138,7 @@ npm run typecheck     # tsc -b
 npm run build
 npm test              # parses every CSV in ./ingest and runs sanity checks
 cd src-tauri && cargo clippy
-npm run app:build     # Windows installer
+npm run app:build     # portable Windows exe, copied to release/ (git-ignored); app:installer for NSIS
 ```
 
 - Rust lives in `~/.cargo/bin`, which a shell opened before rustup was installed doesn't have on
@@ -160,7 +160,7 @@ npm run app:build     # Windows installer
 
 ## Release status
 
-- The Windows installer (`src-tauri/target/release/bundle/nsis/`) is **unsigned** (no
+- The Windows exe and installer (`src-tauri/target/release/`) are **unsigned** (no
   code-signing certificate), so SmartScreen will warn.
 - Android has no release signing. A signed release needs the user's keystore; don't invent one.
 - Leave no `console.log` debugging in release code.

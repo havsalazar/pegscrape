@@ -38,14 +38,15 @@ node --experimental-strip-types scripts/simulate-ride.ts --start <lat>,<lon> --v
 
 ### Windows
 ```powershell
-npm run app:build      # src-tauri/target/release/bundle/nsis/Pegscrape_x.y.z_x64-setup.exe
+npm run app:build      # portable exe: release/Pegscrape_x.y.z_portable.exe (needs WebView2, built into Windows 10/11)
+npm run app:installer  # NSIS installer: src-tauri/target/release/bundle/nsis/
 ```
 
 ### Android
 ```powershell
 npm run android:init   # once: generates src-tauri/gen/android
 npm run android:dev    # run on a connected device, with hot reload
-npm run android:build  # APK/AAB (signing needs your release keystore)
+npm run android:build  # release APK (arm64), unsigned: release/Pegscrape_x.y.z_unsigned.apk
 ```
 
 The icons come from `powershell -File scripts/make-icon.ps1` (desktop icons via `tauri icon`, plus

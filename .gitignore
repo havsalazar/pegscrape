@@ -12,3 +12,4 @@ ingest/*
 *.jks
 *.keystore
 .vscode/
+release/

@@ -26,3 +26,11 @@ flate2 = "1.1.11"
 crc32fast = "1.5.5"
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 uuid = { version = "1", features = ["macro-diagnostics"] }
+
+# Smaller release binaries (the Windows exe and the Android library).
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
