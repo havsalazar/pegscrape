@@ -4,13 +4,27 @@
 //   node --experimental-strip-types scripts/simulate-ride.ts \
 //     --start 3.8935,-76.3694 --via 3.8729,-76.4990 --avg 160 --out ingest/SIM0001.CSV
 //
-// Options: --avg km/h (average moving speed, default 160), --max-lean degrees (default 58),
-// --width (how far the circuit swings out to the sides, as a fraction of start→via, default 0.1),
-// --seed (sensor noise), --date YYYY-MM-DD, --utc HH:MM:SS.
+// With --route <file.json> the lap follows that line instead of a drawn circuit (--via is then
+// not needed): an OSRM /route response (geometries=geojson), a GeoJSON LineString or Feature, or
+// a plain [[lon, lat], ...] array. Road data is straight pieces with sharp vertices, so it is
+// smoothed into the line a rider would take.
+//
+// Options:
+//   --max-lean deg   most lean the rider uses (default 58: track; 40-45 is fast street riding)
+//   --top km/h       top speed on the straights (default: as fast as the bike goes)
+//   --brake g        hardest braking (default 1.0)
+//   --accel g        hardest acceleration (default 0.62; power and drag reduce it with speed)
+//   --avg km/h       wanted average: the top speed (up to --top) is searched for it. Without
+//                    --avg the rider rides at the limits above and the average is what results.
+//   --vary 0..1      the cruising speed drifts between (1 - vary) × top and top along the road
+//                    (default 0: always top where corners allow)
+//   --width          how far a drawn circuit swings out to the sides, as a fraction of
+//                    start→via (default 0.1)
+//   --seed (sensor noise), --date YYYY-MM-DD, --utc HH:MM:SS.
 //
 // The physics: lean = atan(v² κ / g) for path curvature κ, so a tighter turn needs more lean.
 // Where a turn would need more than --max-lean, the rider brakes for it first (corner speed
-// limit), then accelerates out. The top speed is searched so the lap averages --avg.
+// limit), then accelerates out.
 //
 // The CSV matches rounded_fw: 10 rows per second; GPS (utc, lat, lon, speed) updates once per
 // second; lean and longitudinal g every row; state BRK / ACC past ±0.10 g. Right lean is positive.
@@ -36,8 +50,14 @@ const latLon = (s: string): [number, number] => {
 };
 
 const start = latLon(arg('start'));
-const via = latLon(arg('via'));
-const avgKmh = Number(arg('avg', '160'));
+const routeFile = process.argv.includes('--route') ? arg('route') : null;
+// With a route the drawn circuit isn't used; a dummy via keeps its maths finite.
+const via = routeFile ? ([start[0], start[1] + 0.1] as [number, number]) : latLon(arg('via'));
+const avgKmh = process.argv.includes('--avg') ? Number(arg('avg')) : null;
+const topMs = Number(arg('top', '400')) / 3.6;
+const brakeG = Number(arg('brake', '1.0'));
+const accelG = Number(arg('accel', '0.62'));
+const vary = Number(arg('vary', '0'));
 const maxLean = (Number(arg('max-lean', '58')) * Math.PI) / 180;
 const widthFrac = Number(arg('width', '0.1'));
 const out = arg('out');
@@ -143,7 +163,29 @@ function buildLap() {
   }
   return dense;
 }
-const dense = buildLap();
+/** A route file as a dense, smoothed polyline in the local frame. */
+function loadRoute(file: string) {
+  const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const coords: [number, number][] =
+    j.routes?.[0]?.geometry?.coordinates ?? j.geometry?.coordinates ?? j.coordinates ?? j;
+  if (!Array.isArray(coords) || coords.length < 2) throw new Error(`no line in ${file}`);
+  const pts = coords.map(([lo, la]) => toXY([la, lo]));
+  // Densify to 1 m...
+  const d: number[][] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+    const k = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+    for (let m = 1; m <= k; m++) d.push([ax + ((bx - ax) * m) / k, ay + ((by - ay) * m) / k]);
+  }
+  // ...then average positions over ±12 m: rounds the vertices off into curves.
+  const w = 12;
+  return d.map((_, i) => {
+    let x = 0, y = 0, c = 0;
+    for (let m = Math.max(0, i - w); m <= Math.min(d.length - 1, i + w); m++) (x += d[m][0]), (y += d[m][1]), c++;
+    return [x / c, y / c];
+  });
+}
+const dense = routeFile ? loadRoute(routeFile) : buildLap();
 
 // Resample every DS metres along the path.
 const DS = 2;
@@ -196,8 +238,22 @@ const kappa = smooth(kRaw, 24);
 // ---- Speed profile for a given top speed (m/s): corner limits, then accel / brake passes.
 // Traction-limited low down, power-limited (about 650 W/kg) higher up, less air drag: tops out
 // near 290 km/h.
-const accelAt = (v: number) => Math.min(0.62 * G, 650 / Math.max(v, 1)) - 0.0012 * v * v;
-const BRAKE = 1.0 * G;
+const accelAt = (v: number) => Math.min(accelG * G, 650 / Math.max(v, 1)) - 0.0012 * v * v;
+const BRAKE = brakeG * G;
+// How fast the rider wants to go where nothing forces them slower, as a fraction of the top
+// speed: with --vary it drifts smoothly between 1 - vary and 1 over a few kilometres (traffic,
+// sight lines, mood), from a sum of slow waves with seeded phases.
+const cruise = new Float64Array(N).fill(1);
+if (vary > 0) {
+  const waves = [1200, 2300, 3700, 6100].map((len) => ({ len, phase: rand() * 2 * Math.PI }));
+  for (let i = 0; i < N; i++) {
+    let s = 0;
+    for (const w of waves) s += Math.sin((2 * Math.PI * i * DS) / w.len + w.phase);
+    // s / 4 rarely leaves ±0.55: scale that to ±1, clamp, then map -1..1 to 1 - vary..1.
+    const n = Math.max(-1, Math.min(1, s / (waves.length * 0.55)));
+    cruise[i] = 1 - (vary * (1 - n)) / 2;
+  }
+}
 /**
  * The speed along the lap with the straights capped at `vTop` (m/s). Corners are taken at the
  * speed where they need --max-lean, so the tighter the turn, the slower and the more lean, up to
@@ -206,7 +262,7 @@ const BRAKE = 1.0 * G;
  */
 function profile(vTop: number) {
   const v = new Float64Array(N);
-  for (let i = 0; i < N; i++) v[i] = Math.min(vTop, Math.sqrt((G * Math.tan(maxLean)) / Math.max(Math.abs(kappa[i]), 1e-6)));
+  for (let i = 0; i < N; i++) v[i] = Math.min(vTop * cruise[i], Math.sqrt((G * Math.tan(maxLean)) / Math.max(Math.abs(kappa[i]), 1e-6)));
   v[0] = 0;
   v[N - 1] = 0;
   for (let i = 1; i < N; i++) v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] ** 2 + 2 * Math.max(accelAt(v[i - 1]), 0) * DS)));
@@ -215,21 +271,23 @@ function profile(vTop: number) {
   for (let i = 1; i < N; i++) t += DS / Math.max((v[i] + v[i - 1]) / 2, 0.5);
   return { v, t, vTop };
 }
-// Bisect the top speed for the wanted average.
-let lo = 10, hi = 120;
-let best = profile(hi);
-if (lapM / best.t < avgKmh / 3.6) {
-  console.error(
-    `Flat out, this circuit averages ${((lapM / best.t) * 3.6).toFixed(0)} km/h: ` +
-      `${avgKmh} km/h needs more lean (--max-lean) or a wider circuit (--width).`,
-  );
-  process.exit(1);
-}
-for (let it = 0; it < 60; it++) {
-  const mid = (lo + hi) / 2;
-  const p = profile(mid);
-  if (lapM / p.t < avgKmh / 3.6) lo = mid;
-  else (hi = mid), (best = p);
+// At the limits; with --avg, bisect the top speed (up to --top) for the wanted average.
+let best = profile(topMs);
+if (avgKmh !== null) {
+  if (lapM / best.t < avgKmh / 3.6) {
+    console.error(
+      `At these limits the lap averages ${((lapM / best.t) * 3.6).toFixed(0)} km/h: ` +
+        `${avgKmh} km/h needs more lean (--max-lean), a higher --top or a wider circuit (--width).`,
+    );
+    process.exit(1);
+  }
+  let lo = 1, hi = topMs;
+  for (let it = 0; it < 60; it++) {
+    const mid = (lo + hi) / 2;
+    const p = profile(mid);
+    if (lapM / p.t < avgKmh / 3.6) lo = mid;
+    else (hi = mid), (best = p);
+  }
 }
 const v = best.v;
 
@@ -309,7 +367,7 @@ fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
 fs.writeFileSync(out, lines.join('\n') + '\n');
 
 // Corners: stretches needing more than 15° of lean, with the apex (most lean) of each.
-console.log('  corners (side, entry → apex speed, lean at apex, radius):');
+const cornerList: { line: string; left: boolean; apexKmh: number }[] = [];
 for (let i = 0; i < N; i++) {
   const leanAt = (j: number) => (Math.atan((v[j] * v[j] * Math.abs(kappa[j])) / G) * 180) / Math.PI;
   if (leanAt(i) < 15) continue;
@@ -321,11 +379,19 @@ for (let i = 0; i < N; i++) {
   let entry = Math.max(0, i - Math.round(400 / DS));
   for (let k = entry; k < i; k++) if (v[k] > v[entry]) entry = k;
   const side = kappa[apex] > 0 ? 'left ' : 'right';
-  console.log(
-    `    ${side} ${Math.round(v[entry] * 3.6)} → ${Math.round(v[apex] * 3.6)} km/h, ${leanAt(apex).toFixed(0)}°, r ${(1 / Math.abs(kappa[apex])).toFixed(0)} m`,
-  );
+  cornerList.push({
+    line: `    ${side} ${Math.round(v[entry] * 3.6)} → ${Math.round(v[apex] * 3.6)} km/h, ${leanAt(apex).toFixed(0)}°, r ${(1 / Math.abs(kappa[apex])).toFixed(0)} m`,
+    left: kappa[apex] > 0,
+    apexKmh: v[apex] * 3.6,
+  });
   i = j;
 }
+const lefts = cornerList.filter((c) => c.left).length;
+console.log(`  ${cornerList.length} corners over 15° of lean (${lefts} left, ${cornerList.length - lefts} right)`);
+// All of them for a short list, the slowest ones for a long one.
+const shown = cornerList.length <= 30 ? cornerList : [...cornerList].sort((a, b) => a.apexKmh - b.apexKmh).slice(0, 15);
+console.log(`  ${shown.length < cornerList.length ? 'the 15 slowest' : 'each'} (side, entry → apex speed, lean at apex, radius):`);
+for (const c of shown) console.log(c.line);
 const minR = 1 / Math.max(...Array.from(kappa, Math.abs));
 console.log(`${out}: ${lines.length - 1} rows`);
 console.log(`  lap ${(lapM / 1000).toFixed(2)} km in ${Math.floor(lapT / 60)}:${String(Math.round(lapT % 60)).padStart(2, '0')}`);
