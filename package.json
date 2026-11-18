@@ -14,10 +14,12 @@
     "segments": "node --experimental-strip-types --no-warnings scripts/segments.ts",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build",
+    "app:build": "tauri build --no-bundle && node scripts/collect-release.mjs windows",
+    "app:installer": "tauri build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build"
+    "android:build": "tauri android build --apk --target aarch64 && node scripts/collect-release.mjs android",
+    "release": "node scripts/collect-release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",
