@@ -16,7 +16,7 @@ interface Props {
   onUserPan: () => void;
 }
 
-// Esri basemaps: keyless, and they work from file:// (Electron) and the Android WebView.
+// Esri basemaps: keyless, and they load in both Tauri webviews (WebView2 and Android WebView).
 // Tiles go through the offline cache (see lib/tileCache.ts).
 /** Deepest zoom with real tiles for Street_Map and Imagery (checked: level 20 returns a placeholder). */
 const MAX_NATIVE_ZOOM = 19;

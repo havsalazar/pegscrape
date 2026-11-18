@@ -7,22 +7,22 @@ covers what isn't obvious from the code.
 
 Pegscrape views the `RIDExxxx.CSV` ride logs written by an ESP32-S3 motorcycle lean-angle logger
 (Waveshare ESP32-S3-Touch-AMOLED-1.75). The app is React 19 + TypeScript + Vite 8 + Tailwind v4 +
-shadcn/ui + Leaflet, in a **Tauri 2** shell (`src-tauri/`, Rust) for Windows and Android, app id
-`com.incli.app` (kept from the Capacitor app, so Android updates it in place).
+shadcn/ui + Leaflet, in a **Tauri 2** shell (`src-tauri/`, Rust) for Windows and Android.
 
-Branches: `main` is the previous Electron (Windows) + Capacitor (Android) app, which works
-end-to-end on both. `tauri` is the port to Tauri (in progress, see "Tauri port status").
+The app id is `com.incli.app`, kept from the app's first, Electron + Capacitor version (commit
+`f0c1203`), so Android installs over that one in place. Don't change it.
 
 The logger's firmware lives in a **separate repo**, `rounded-inc` (local checkout:
 `<FIRMWARE_REPO>`). `rounded_fw/` is the ESP-IDF 6.1 firmware and `roundedui/` its LVGL Pro UI.
 The app and the firmware share a Bluetooth protocol, so a change to one side may need the other.
 
 Repository: https://github.com/havsalazar/pegscrape (public). Ride logs in `ingest/` hold real
-GPS tracks and are git-ignored; never commit them.
+GPS tracks and are git-ignored; never commit them (that includes simulated rides and route files
+made from real places).
 
 Version: 0.3.0. Bump `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`
-together. The Android versionCode is `bundle.android.versionCode` in `tauri.conf.json` (4; the
-Capacitor app was at 3, and it must keep growing for in-place updates).
+together. The Android versionCode is `bundle.android.versionCode` in `tauri.conf.json` (4); it
+must keep growing for in-place updates.
 
 ### Local paths (placeholders)
 
@@ -32,7 +32,19 @@ Replace these with the paths on your machine:
 |---|---|
 | `<FIRMWARE_REPO>` | Local checkout of the `rounded-inc` firmware repo |
 | `<JDK21_HOME>` | A JDK 21 install (e.g. JetBrains Runtime 21) |
-| `<ANDROID_SDK>` | The Android SDK root (the folder holding `platform-tools/`) |
+| `<ANDROID_SDK>` | The Android SDK root (the folder holding `platform-tools/` and `ndk/`) |
+
+## Layout
+
+- `src/`: the web app (React). Runs in WebView2 on Windows and the Android System WebView.
+- `src-tauri/`: the Tauri app. `src/lib.rs` registers plugins and commands, `src/logger.rs` is
+  the logger protocol, `tauri.conf.json` the window, bundle and app id, `app-icon.png` the icon
+  source (`scripts/make-icon.ps1` draws it and runs `tauri icon`).
+- `src-tauri/gen/android/`: the generated Android project (committed; build output and
+  `tauri.settings.gradle`, which holds local paths, are ignored). minSdk is 26 because
+  tauri-plugin-blec needs it.
+- `scripts/`: `check-ride.ts` (npm test), `segments.ts`, `simulate-ride.ts` (simulated rides, see
+  the README), `make-icon.ps1`.
 
 ## The Bluetooth link to the logger
 
@@ -40,28 +52,27 @@ Files:
 - `src-tauri/src/logger.rs`: the protocol, in Rust. Tauri commands `logger_scan_start/stop`,
   `logger_connect/disconnect`, `logger_info`, `logger_list`, `logger_download`, `logger_abort`,
   `logger_remove`. Errors reach the page as `{ kind: 'logger' | 'aborted' | 'ble', message }`.
-- `src/lib/loggerLink.ts`: the page's side, the `LoggerLink` class (same API as on `main`, so
-  RidesSheet didn't change). Maps `aborted` to an `AbortError`, `logger` to `LoggerError`.
+- `src/lib/loggerLink.ts`: the page's side, the `LoggerLink` class. Maps `aborted` to an
+  `AbortError`, `logger` to `LoggerError`.
 - `src/lib/rideLibrary.ts`: rides saved in the app (IndexedDB `pegscrape-rides`, stores `meta`
   and `data`).
 - `src/components/RidesSheet.tsx`: the Rides panel UI.
-- `src/lib/keepAlive.ts`: the Android foreground service for screen-off downloads. **A no-op on
-  this branch** until it's ported (the Capacitor version is
-  `android/app/src/main/java/com/incli/app/{KeepAlivePlugin,TransferService}.java` on `main`).
+- `src/lib/keepAlive.ts`: meant to keep a download alive with the screen off on Android (a
+  foreground service). **A no-op for now**: the Tauri mobile plugin for it is still to do.
 
 The BLE library is `tauri-plugin-blec` 0.20 (crate `blec`): btleplug on Windows, its own Kotlin
 backend on Android. `logger.rs` uses its Rust API (`tauri_plugin_blec::get_handler()`), not its
 JavaScript one. Web Bluetooth isn't available in WebView2 or the Android WebView, so a plain
 browser (`npm run dev`) has no Bluetooth. Scanning works on both platforms, so the app always
-shows its own list of loggers (`canScan` is true in the app).
+shows its own list of loggers.
 
-Unlike the Capacitor plugin, blec has no "connection priority HIGH" call on Android, which made
-downloads several times faster there. If Android downloads are slow, that's the first suspect.
+blec has no "connection priority HIGH" call on Android. Downloads are as fast without it (tested),
+but if Android downloads ever get slow, that's the first suspect.
 
 ### Protocol
 
-The authoritative description is the top of `rounded_fw/main/ble_sync.h` in the firmware repo.
-The header comment of `loggerLink.ts` is out of date (it says proto=1 and doesn't list GETZ).
+The authoritative description is the top of `rounded_fw/main/ble_sync.h` in the firmware repo;
+`logger.rs` has a summary.
 
 - Service `5d2a0001-8f4e-4c7a-b1d3-6e9f2a4c8b10`.
 - CMD `…0002`: write one text command per write.
@@ -98,49 +109,27 @@ retried once. ABORT is written without waiting for that mutex.
   more, or parallel commands, are a bad idea. The firmware handles one command at a time.
 - The logger refuses card access while it's recording; the UI tells the user to stop recording.
 
-### Verified state on `main` (Electron + Capacitor, 2026-11-14)
+### Verified state (2026-11-18, logger Pegscrape-1474)
 
-- Windows (Electron) and Android (Galaxy SM-S948B): a 3.4 MB ride downloads in about 6 s
-  compressed, also with the phone's screen off, with no drops.
-- The end-to-end flows work: connect, list, download, save, open, delete the saved copy, cancel,
-  resume.
-- **Never tested against real hardware: deleting a ride on the logger (`DEL`)** from the app.
-  Test it with a small throwaway ride before relying on it.
-
-## Tauri port status (2026-11-18)
-
-Done and checked on Windows: `cargo clippy` is clean, `npm run typecheck`, `npm test` and
-`npm run app:build` pass (an NSIS installer of about 3 MB).
-
-Tested against the logger (Pegscrape-1474) on Windows, release build:
-- Scan finds it; connect in about 2.3 s (1.2 s to the remembered logger); INFO and LS work.
-- GETZ download of the 3.4 MB RIDE0005.CSV in 5.7 s (about 620 KB/s, same as Electron), SHA-256
-  identical to the file on the card.
-- Cancel: ABORT ends the download within about 130 ms with `aborted`; the link keeps working.
-- Disconnect: the page is told, later commands fail with "Not connected to the logger."
-- Through the Rides panel: connect from the scan list, download with live progress, the ride
-  appears under "Saved in this app" and opens (map, timeline, stats), disconnect, reconnect.
-- **Not tested: DEL** (deleting a ride on the logger), same as on `main`.
-
-Tested on Android (Galaxy SM-S948B, debug APK installed over the Capacitor app, versionCode 4):
-- Installs in place over the Capacitor app (same debug signing key).
-- Scan, connect (1.3 s), INFO, LS work; the Bluetooth permission carried over.
-- GETZ download of RIDE0005.CSV in 5.75 s, SHA-256 identical: as fast as Capacitor, so the
-  missing "connection priority HIGH" call doesn't matter.
-- Cancel works; 11 downloads back to back over 63 s with no drop (the 40 s drop doesn't recur).
-- Through the Rides panel: scan list, connect, download (613 KB in 1.5 s), saved, opens with
-  map, telemetry and timeline.
-- A download with the screen off for 15 s (phone dozing) completed normally. Longer screen-off
-  periods still need the foreground service (to do 2).
-- The page's origin changed from Capacitor's to `http://tauri.localhost`, so rides saved and map
-  tiles cached by the Capacitor app are **not** visible in the Tauri app (IndexedDB is per
-  origin). They have to be downloaded again.
+Windows (release build) and Android (Galaxy SM-S948B, debug build):
+- Scan, connect (1.2 to 2.3 s), INFO, LS.
+- GETZ download of a 3.4 MB ride in about 5.7 s on both, byte-identical to the card.
+- Cancel (ABORT ends it within about 130 ms; the link keeps working), disconnect, reconnect to
+  the remembered logger.
+- Android: 11 downloads back to back over 63 s with no drop; a download with the screen off for
+  15 s completed.
+- Through the Rides panel on both: scan list, connect, download with progress, saved, opens.
+- **Never tested against real hardware: deleting a ride on the logger (`DEL`)**. Test it with a
+  small throwaway ride before relying on it.
 
 To do:
 1. Test DEL with a throwaway ride.
-2. Port the screen-off foreground service as a small Tauri mobile plugin and wire up
+2. The screen-off foreground service as a small Tauri mobile plugin, wired to
    `src/lib/keepAlive.ts`.
 3. Android release signing (needs the user's keystore).
+
+Rides and map tiles saved by the old Capacitor app aren't visible in this one: the page's
+origin is now `http://tauri.localhost`, and IndexedDB is per origin.
 
 ## Checks
 
@@ -155,21 +144,19 @@ npm run app:build     # Windows installer
 - Rust lives in `~/.cargo/bin`, which a shell opened before rustup was installed doesn't have on
   its PATH.
 - Android builds: `ANDROID_HOME=<ANDROID_SDK>`, `NDK_HOME=<ANDROID_SDK>/ndk/<version>`,
-  `JAVA_HOME=<JDK21_HOME>`, then `npx tauri android build --debug --apk --target aarch64` and
+  `JAVA_HOME=<JDK21_HOME>` (Gradle can't run on Android Studio's bundled JBR 25), then
+  `npx tauri android build --debug --apk --target aarch64` and
   `adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`.
-- To drive the Windows app: start `src-tauri/target/release/pegscrape.exe` with
-  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`, then use the Chrome
-  DevTools Protocol on `http://127.0.0.1:9333/json` and call commands through
-  `window.__TAURI_INTERNALS__.invoke`.
-
-- Android builds: Gradle can't run on Android Studio's bundled JBR 25. Use
-  `JAVA_HOME=<JDK21_HOME>`.
 - The adb binary is `<ANDROID_SDK>/platform-tools/adb.exe`. The user's phone is a Galaxy
   SM-S948B on wireless adb. In Git Bash, prefix adb commands that take device paths with
   `MSYS_NO_PATHCONV=1`.
+- To drive the Windows app: start `src-tauri/target/release/pegscrape.exe` with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`, then use the Chrome
+  DevTools Protocol on `http://127.0.0.1:9333/json` and call commands through
+  `window.__TAURI_INTERNALS__.invoke`. `DOM.setFileInputFiles` on `input[type=file]` opens a CSV.
 - To drive the app on the phone: `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`,
-  then use the Chrome DevTools Protocol (`Runtime.evaluate` with `userGesture: true`; Bluetooth
-  needs a user gesture).
+  then the same. The phone locks itself after a while, which pauses the page: keep it unlocked.
+  `Page.captureScreenshot` hangs there; use `adb exec-out screencap -p` instead.
 
 ## Release status
 

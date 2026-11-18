@@ -73,7 +73,7 @@ export default function App() {
 
   const pick = useCallback(() => inputRef.current?.click(), []);
 
-  // Drag & drop anywhere (desktop / Electron).
+  // Drag & drop anywhere (desktop; Tauri's own file drop is off so the page gets the events).
   useEffect(() => {
     let depth = 0;
     const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
